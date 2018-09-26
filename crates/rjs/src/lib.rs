@@ -50,31 +50,31 @@ impl<'de> Deserialize<'de> for MyTerm<'de> {
     }
 }
 
+fn badarg<E1, E2>(_e: E1) -> E2
+where
+    E2: serde::ser::Error,
+{
+    E2::custom("badarg")
+}
+
 impl<'a> Serialize for MyTerm<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        use serde::ser::Error;
         use TermType::*;
         let term = self.inner;
 
         match term.get_type() {
             Atom => {
-                let s = term
-                    .atom_to_string()
-                    .map_err(|_e| S::Error::custom("badarg"))?;
+                let s = term.atom_to_string().map_err(badarg)?;
 
                 serializer.serialize_str(&s)
             }
 
             Binary => {
-                let bin = term
-                    .into_binary()
-                    .map_err(|_e| S::Error::custom("badarg"))?;
-
-                let s =
-                    std::str::from_utf8(bin.as_slice()).map_err(|_e| S::Error::custom("badarg"))?;
+                let bin = term.into_binary().map_err(badarg)?;
+                let s = std::str::from_utf8(bin.as_slice()).map_err(badarg)?;
                 serializer.serialize_str(s)
             }
 
@@ -83,9 +83,7 @@ impl<'a> Serialize for MyTerm<'a> {
 
                 let mut tail = term;
                 while !tail.is_empty_list() {
-                    let (head, next_tail) = tail
-                        .list_get_cell()
-                        .map_err(|_e| S::Error::custom("badarg"))?;
+                    let (head, next_tail) = tail.list_get_cell().map_err(badarg)?;
                     v.push(head);
                     tail = next_tail;
                 }
@@ -98,10 +96,10 @@ impl<'a> Serialize for MyTerm<'a> {
             }
 
             Map => {
-                let size = term.map_size().map_err(|_e| S::Error::custom("badarg"))?;
+                let size = term.map_size().map_err(badarg)?;
                 let iter = match MapIterator::new(term) {
                     Some(iter) => iter,
-                    None => return Err(S::Error::custom("badarg")),
+                    None => return Err(badarg(())),
                 };
                 let mut map = serializer.serialize_map(Some(size))?;
                 for (key, val) in iter {
@@ -110,14 +108,15 @@ impl<'a> Serialize for MyTerm<'a> {
                 map.end()
             }
 
-            Number => {
-                let v: f64 = term.decode().map_err(|_e| S::Error::custom("badarg"))?;
-                serializer.serialize_f64(v)
-            }
+            Number => match term.decode::<f64>() {
+                Ok(v) => serializer.serialize_f64(v),
+                Err(_e) => {
+                    let v = term.decode::<i64>().map_err(badarg)?;
+                    serializer.serialize_i64(v)
+                }
+            },
 
-            Tuple | EmptyList | Exception | Fun | Pid | Port | Ref | Unknown => {
-                Err(S::Error::custom("badarg"))
-            }
+            Tuple | EmptyList | Exception | Fun | Pid | Port | Ref | Unknown => Err(badarg(())),
         }
     }
 }
