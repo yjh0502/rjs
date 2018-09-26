@@ -1,0 +1,9 @@
+{application, rjs, [
+    {description, "Rust-powered JSON library"},
+    {vsn, git},
+    {registered, []},
+    {applications, [kernel, stdlib]},
+    {maintainers, ["Jihyun Yu"]},
+    {licenses, ["MIT", "APACHE"]},
+    {links, [{"GitHub", "https://github.com/yjh0502/rjs"}]}
+]}.

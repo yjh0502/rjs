@@ -1,0 +1,2 @@
+language: erlang
+script: rebar3 compile
