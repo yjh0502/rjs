@@ -22,12 +22,44 @@ mod atoms {
     }
 }
 
-thread_local!(static ENV: Cell<Option<NifEnv>> = Cell::new(None));
-
-struct MyTerm<'a> {
-    inner: Term<'a>,
+#[derive(Clone, Copy)]
+struct DecodeOpt {
+    label_atom: bool,
 }
-impl<'de> Deserialize<'de> for MyTerm<'de> {
+
+#[derive(Clone, Copy)]
+struct DecodeEnv {
+    nifenv: NifEnv,
+    opt: DecodeOpt,
+}
+
+thread_local!(static ENV: Cell<Option<DecodeEnv>> = Cell::new(None));
+
+type MapKeyTerm<'a> = VTerm<'a, MapKeyVisitor<'a>>;
+type MyTerm<'a> = VTerm<'a, TermVisitor<'a>>;
+
+struct VTerm<'a, V> {
+    inner: Term<'a>,
+    _unused: std::marker::PhantomData<V>,
+}
+impl<'a, V> Into<Term<'a>> for VTerm<'a, V> {
+    fn into(self) -> Term<'a> {
+        self.inner
+    }
+}
+impl<'a, V> From<Term<'a>> for VTerm<'a, V> {
+    fn from(inner: Term<'a>) -> Self {
+        Self {
+            inner,
+            _unused: std::default::Default::default(),
+        }
+    }
+}
+
+impl<'de, V> Deserialize<'de> for VTerm<'de, V>
+where
+    V: Visitor<'de, Value = Term<'de>> + EnvVisitor<'de>,
+{
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -37,11 +69,11 @@ impl<'de> Deserialize<'de> for MyTerm<'de> {
                 .get()
                 .expect("deserialize should be called with env context");
             let inner = {
-                let env = unsafe { Env::new(&ENV, env) };
-                let visitor = TermVisitor { env };
+                let env0 = unsafe { Env::new(&ENV, env.nifenv) };
+                let visitor = V::from_env(env0, env.opt);
                 deserializer.deserialize_any(visitor)?
             };
-            Ok(Self { inner })
+            Ok(inner.into())
         })
     }
 }
@@ -49,6 +81,13 @@ impl<'de> Deserialize<'de> for MyTerm<'de> {
 fn badarg<E1, E2>(_e: E1) -> E2
 where
     E2: serde::ser::Error,
+{
+    E2::custom("badarg")
+}
+
+fn dbadarg<E1, E2>(_e: E1) -> E2
+where
+    E2: serde::de::Error,
 {
     E2::custom("badarg")
 }
@@ -86,7 +125,8 @@ impl<'a> Serialize for MyTerm<'a> {
 
                 let mut seq = serializer.serialize_seq(Some(v.len()))?;
                 for elem in v {
-                    seq.serialize_element(&MyTerm { inner: elem })?;
+                    let t_elem = MyTerm::from(elem);
+                    seq.serialize_element(&t_elem)?;
                 }
                 seq.end()
             }
@@ -99,7 +139,9 @@ impl<'a> Serialize for MyTerm<'a> {
                 };
                 let mut map = serializer.serialize_map(Some(size))?;
                 for (key, val) in iter {
-                    map.serialize_entry(&MyTerm { inner: key }, &MyTerm { inner: val })?;
+                    let t_key = MyTerm::from(key);
+                    let t_val = MyTerm::from(val);
+                    map.serialize_entry(&t_key, &t_val)?;
                 }
                 map.end()
             }
@@ -122,13 +164,23 @@ enum Labels {
     Binary,
 }
 
+trait EnvVisitor<'a> {
+    fn from_env(env: Env<'a>, opt: DecodeOpt) -> Self;
+}
+
 #[derive(Clone, Copy)]
 struct MapKeyVisitor<'a> {
     env: Env<'a>,
 }
 
+impl<'a> EnvVisitor<'a> for MapKeyVisitor<'a> {
+    fn from_env(env: Env<'a>, _opt: DecodeOpt) -> Self {
+        Self { env }
+    }
+}
+
 impl<'de> Visitor<'de> for MapKeyVisitor<'de> {
-    type Value = Atom;
+    type Value = Term<'de>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str("any valid JSON value")
@@ -139,13 +191,21 @@ impl<'de> Visitor<'de> for MapKeyVisitor<'de> {
     where
         E: serde::de::Error,
     {
-        Atom::from_str(self.env, value).map_err(|_e| E::custom("badarg"))
+        let atom = Atom::from_str(self.env, value).map_err(dbadarg)?;
+        Ok(atom.to_term(self.env))
     }
 }
 
 #[derive(Clone, Copy)]
 struct TermVisitor<'a> {
     env: Env<'a>,
+    opt: DecodeOpt,
+}
+
+impl<'a> EnvVisitor<'a> for TermVisitor<'a> {
+    fn from_env(env: Env<'a>, opt: DecodeOpt) -> Self {
+        Self { env, opt }
+    }
 }
 
 impl<'de> Visitor<'de> for TermVisitor<'de> {
@@ -227,20 +287,28 @@ impl<'de> Visitor<'de> for TermVisitor<'de> {
         Ok(term)
     }
 
-    fn visit_map<V>(self, mut visitor: V) -> Result<Self::Value, V::Error>
+    fn visit_map<V>(self, visitor: V) -> Result<Self::Value, V::Error>
     where
         V: MapAccess<'de>,
     {
-        use serde::de::Error;
-
-        let mut map = Term::map_new(self.env);
-        while let Some((key, value)) = visitor.next_entry::<MyTerm, MyTerm>()? {
-            map = map
-                .map_put(key.inner, value.inner)
-                .map_err(|_e| V::Error::custom("badarg"))?;
+        if self.opt.label_atom {
+            build_map::<MapKeyTerm, _>(self.env, visitor)
+        } else {
+            build_map::<MyTerm, _>(self.env, visitor)
         }
-        Ok(map)
     }
+}
+
+fn build_map<'a, T, V>(env: Env<'a>, mut visitor: V) -> Result<Term<'a>, V::Error>
+where
+    V: MapAccess<'a>,
+    T: Deserialize<'a> + Into<Term<'a>>,
+{
+    let mut map = Term::map_new(env);
+    while let Some((key, value)) = visitor.next_entry::<T, MyTerm>()? {
+        map = map.map_put(key.into(), value.into()).map_err(dbadarg)?;
+    }
+    Ok(map)
 }
 
 rustler_export_nifs!(
@@ -255,8 +323,8 @@ fn encode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
     }
 
     let term = args[0];
-    let term = &MyTerm { inner: term };
-    let out = serde_json::to_string(term).map_err(|_e| BadArg)?;
+    let term = MyTerm::from(term);
+    let out = serde_json::to_string(&term).map_err(|_e| BadArg)?;
 
     let mut bin = OwnedBinary::new(out.len()).ok_or(BadArg)?;
     (&mut bin).copy_from_slice(out.as_bytes());
@@ -274,7 +342,11 @@ fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
     let s = std::str::from_utf8(&data).map_err(|_e| BadArg)?;
 
     let res = ENV.with(|c| {
-        c.set(Some(env.as_c_arg()));
+        let env = DecodeEnv {
+            nifenv: env.as_c_arg(),
+            opt: DecodeOpt { label_atom: false },
+        };
+        c.set(Some(env));
         let res = serde_json::from_str::<MyTerm>(s).map_err(|_e| BadArg);
         c.set(None);
         res
