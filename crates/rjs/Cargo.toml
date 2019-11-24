@@ -7,8 +7,8 @@ authors = ["Jihyun Yu <yjh0502@gmail.com>"]
 crate-type = ["dylib"]
 
 [dependencies]
-rustler = "0.18"
-erlang_nif-sys = "0.6"
+rustler = "0.21"
+rustler_sys = "2"
 lazy_static = "1"
 serde = "1"
 serde_json = "1"

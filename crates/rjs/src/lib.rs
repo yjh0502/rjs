@@ -2,16 +2,15 @@
 extern crate rustler;
 #[macro_use]
 extern crate lazy_static;
-extern crate erlang_nif_sys;
 extern crate serde;
 extern crate serde_json;
 
-pub type NifEnv = *mut erlang_nif_sys::ErlNifEnv;
+pub type NifEnv = *mut rustler_sys::rustler_sys_api::ErlNifEnv;
 
 use std::cell::Cell;
 use std::fmt;
 
-use rustler::types::{Binary, MapIterator, OwnedBinary};
+use rustler::types::{atom::Atom, Binary, MapIterator, OwnedBinary};
 use rustler::{Encoder, Env, NifResult, Term, TermType};
 use serde::de::{Deserialize, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
@@ -39,7 +38,7 @@ impl<'de> Deserialize<'de> for MyTerm<'de> {
         ENV.with(|env| {
             let env = env
                 .get()
-                .expect("deserialize should be done with env context");
+                .expect("deserialize should be called with env context");
             let inner = {
                 let env = unsafe { Env::new(&ENV, env) };
                 let visitor = TermVisitor { env };
@@ -118,6 +117,32 @@ impl<'a> Serialize for MyTerm<'a> {
 
             Tuple | EmptyList | Exception | Fun | Pid | Port | Ref | Unknown => Err(badarg(())),
         }
+    }
+}
+
+#[allow(unused)]
+enum Labels {
+    Binary,
+}
+
+#[derive(Clone, Copy)]
+struct MapKeyVisitor<'a> {
+    env: Env<'a>,
+}
+
+impl<'de> Visitor<'de> for MapKeyVisitor<'de> {
+    type Value = Atom;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("any valid JSON value")
+    }
+
+    #[inline]
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Atom::from_str(self.env, value).map_err(|_e| E::custom("badarg"))
     }
 }
 
