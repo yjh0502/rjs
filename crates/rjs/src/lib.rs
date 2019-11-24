@@ -250,6 +250,10 @@ rustler_export_nifs!(
 );
 
 fn encode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
+    if args.len() != 1 {
+        return Err(BadArg);
+    }
+
     let term = args[0];
     let term = &MyTerm { inner: term };
     let out = serde_json::to_string(term).map_err(|_e| BadArg)?;
@@ -262,6 +266,10 @@ fn encode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
 }
 
 fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
+    if args.len() != 1 {
+        return Err(BadArg);
+    }
+
     let data = Binary::from_term(args[0])?;
     let s = std::str::from_utf8(&data).map_err(|_e| BadArg)?;
 
