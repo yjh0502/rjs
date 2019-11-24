@@ -113,6 +113,11 @@ impl<'a> Serialize for MyTerm<'a> {
                 serializer.serialize_str(s)
             }
 
+            EmptyList => {
+                let seq = serializer.serialize_seq(Some(0))?;
+                seq.end()
+            }
+
             List => {
                 let mut v = Vec::new();
 
@@ -154,7 +159,7 @@ impl<'a> Serialize for MyTerm<'a> {
                 }
             },
 
-            Tuple | EmptyList | Exception | Fun | Pid | Port | Ref | Unknown => Err(badarg(())),
+            Tuple | Exception | Fun | Pid | Port | Ref | Unknown => Err(badarg(())),
         }
     }
 }
