@@ -1,9 +1,5 @@
 #[macro_use]
 extern crate rustler;
-#[macro_use]
-extern crate lazy_static;
-extern crate serde;
-extern crate serde_json;
 
 pub type NifEnv = *mut rustler_sys::rustler_sys_api::ErlNifEnv;
 
@@ -11,6 +7,7 @@ use std::cell::Cell;
 use std::fmt;
 
 use rustler::types::{atom::Atom, Binary, MapIterator, OwnedBinary};
+use rustler::Error::BadArg;
 use rustler::{Encoder, Env, NifResult, Term, TermType};
 use serde::de::{Deserialize, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
@@ -73,7 +70,7 @@ impl<'a> Serialize for MyTerm<'a> {
 
             Binary => {
                 let bin = term.into_binary().map_err(badarg)?;
-                let s = std::str::from_utf8(bin.as_slice()).map_err(badarg)?;
+                let s = std::str::from_utf8(&bin).map_err(badarg)?;
                 serializer.serialize_str(s)
             }
 
@@ -254,14 +251,11 @@ rustler_export_nifs!(
 
 fn encode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
     let term = args[0];
-    let out =
-        serde_json::to_string(&MyTerm { inner: term }).map_err(|_e| rustler::Error::BadArg)?;
+    let term = &MyTerm { inner: term };
+    let out = serde_json::to_string(term).map_err(|_e| BadArg)?;
 
-    let mut bin = match OwnedBinary::new(out.len()) {
-        Some(bin) => bin,
-        None => return Err(rustler::Error::BadArg),
-    };
-    bin.as_mut_slice().copy_from_slice(out.as_bytes());
+    let mut bin = OwnedBinary::new(out.len()).ok_or(BadArg)?;
+    (&mut bin).copy_from_slice(out.as_bytes());
 
     let bin = Binary::from_owned(bin, env);
     Ok((atoms::ok(), bin.to_term(env)).encode(env))
@@ -269,11 +263,11 @@ fn encode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
 
 fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
     let data = Binary::from_term(args[0])?;
-    let s = std::str::from_utf8(data.as_slice()).map_err(|_e| rustler::Error::BadArg)?;
+    let s = std::str::from_utf8(&data).map_err(|_e| BadArg)?;
 
     let res = ENV.with(|c| {
         c.set(Some(env.as_c_arg()));
-        let res = serde_json::from_str::<MyTerm>(s).map_err(|_e| rustler::Error::BadArg);
+        let res = serde_json::from_str::<MyTerm>(s).map_err(|_e| BadArg);
         c.set(None);
         res
     });
