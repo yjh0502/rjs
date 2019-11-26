@@ -63,14 +63,12 @@ impl<'a> Serialize for MyTerm<'a> {
         match term.get_type() {
             Atom => {
                 let s = term.atom_to_string().map_err(badarg)?;
-
                 serializer.serialize_str(&s)
             }
 
             Binary => {
                 let bin = term.into_binary().map_err(badarg)?;
-                let s = std::str::from_utf8(&bin).map_err(badarg)?;
-                serializer.serialize_str(s)
+                serializer.serialize_bytes(&bin)
             }
 
             EmptyList => {
@@ -124,15 +122,6 @@ impl<'a> Serialize for MyTerm<'a> {
     }
 }
 
-#[allow(unused)]
-enum Labels {
-    Binary,
-}
-
-trait EnvVisitor<'a> {
-    fn from_env(env: Env<'a>, opt: DecodeOpt) -> Self;
-}
-
 #[derive(Clone, Copy)]
 struct MapKeyVisitor<'a> {
     env: Env<'a>,
@@ -150,13 +139,7 @@ impl<'de, 'a> DeserializeSeed<'de> for MapKeyVisitor<'a> {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_any(self.clone())
-    }
-}
-
-impl<'a> EnvVisitor<'a> for MapKeyVisitor<'a> {
-    fn from_env(env: Env<'a>, _opt: DecodeOpt) -> Self {
-        Self { env }
+        deserializer.deserialize_any(self)
     }
 }
 
@@ -186,17 +169,12 @@ struct TermVisitor<'a> {
 impl<'de, 'a> DeserializeSeed<'de> for TermVisitor<'a> {
     type Value = Term<'a>;
 
+    #[inline]
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
     {
         deserializer.deserialize_any(self)
-    }
-}
-
-impl<'a> EnvVisitor<'a> for TermVisitor<'a> {
-    fn from_env(env: Env<'a>, opt: DecodeOpt) -> Self {
-        Self { env, opt }
     }
 }
 
@@ -283,21 +261,26 @@ impl<'de, 'a> Visitor<'de> for TermVisitor<'a> {
     where
         V: MapAccess<'de>,
     {
-        let mut map = Term::map_new(self.env);
-        loop {
-            let res = if self.opt.label_atom {
-                visitor.next_entry_seed(MapKeyVisitor::from(self), self)?
-            } else {
-                visitor.next_entry_seed(self, self)?
-            };
+        let mut keys = Vec::new();
+        let mut values = Vec::new();
 
-            match res {
-                Some((key, value)) => {
-                    map = map.map_put(key.into(), value.into()).map_err(dbadarg)?;
+        loop {
+            let key = if self.opt.label_atom {
+                visitor.next_key_seed(MapKeyVisitor::from(self))?
+            } else {
+                visitor.next_key_seed(self)?
+            };
+            match key {
+                Some(key) => {
+                    let value = visitor.next_value_seed(self)?;
+                    keys.push(key);
+                    values.push(value);
                 }
-                None => return Ok(map),
+                None => break,
             }
         }
+
+        Term::map_from_arrays(self.env, &keys, &values).map_err(dbadarg)
     }
 }
 
