@@ -1,15 +1,12 @@
 #[macro_use]
 extern crate rustler;
 
-pub type NifEnv = *mut rustler_sys::rustler_sys_api::ErlNifEnv;
-
-use std::cell::Cell;
 use std::fmt;
 
 use rustler::types::{atom::Atom, Binary, MapIterator, OwnedBinary};
 use rustler::Error::BadArg;
 use rustler::{Encoder, Env, NifResult, Term, TermType};
-use serde::de::{Deserialize, MapAccess, SeqAccess, Visitor};
+use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 
 mod atoms {
@@ -27,54 +24,17 @@ struct DecodeOpt {
     label_atom: bool,
 }
 
-#[derive(Clone, Copy)]
-struct DecodeEnv {
-    nifenv: NifEnv,
-    opt: DecodeOpt,
-}
-
-thread_local!(static ENV: Cell<Option<DecodeEnv>> = Cell::new(None));
-
-type MapKeyTerm<'a> = VTerm<'a, MapKeyVisitor<'a>>;
-type MyTerm<'a> = VTerm<'a, TermVisitor<'a>>;
-
-struct VTerm<'a, V> {
+struct MyTerm<'a> {
     inner: Term<'a>,
-    _unused: std::marker::PhantomData<V>,
 }
-impl<'a, V> Into<Term<'a>> for VTerm<'a, V> {
+impl<'a> Into<Term<'a>> for MyTerm<'a> {
     fn into(self) -> Term<'a> {
         self.inner
     }
 }
-impl<'a, V> From<Term<'a>> for VTerm<'a, V> {
+impl<'a> From<Term<'a>> for MyTerm<'a> {
     fn from(inner: Term<'a>) -> Self {
-        Self {
-            inner,
-            _unused: std::default::Default::default(),
-        }
-    }
-}
-
-impl<'de, V> Deserialize<'de> for VTerm<'de, V>
-where
-    V: Visitor<'de, Value = Term<'de>> + EnvVisitor<'de>,
-{
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        ENV.with(|env| {
-            let env = env
-                .get()
-                .expect("deserialize should be called with env context");
-            let inner = {
-                let env0 = unsafe { Env::new(&ENV, env.nifenv) };
-                let visitor = V::from_env(env0, env.opt);
-                deserializer.deserialize_any(visitor)?
-            };
-            Ok(inner.into())
-        })
+        Self { inner }
     }
 }
 
@@ -177,6 +137,22 @@ trait EnvVisitor<'a> {
 struct MapKeyVisitor<'a> {
     env: Env<'a>,
 }
+impl<'a> From<TermVisitor<'a>> for MapKeyVisitor<'a> {
+    fn from(v: TermVisitor<'a>) -> Self {
+        Self { env: v.env }
+    }
+}
+
+impl<'de, 'a> DeserializeSeed<'de> for MapKeyVisitor<'a> {
+    type Value = Term<'a>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self.clone())
+    }
+}
 
 impl<'a> EnvVisitor<'a> for MapKeyVisitor<'a> {
     fn from_env(env: Env<'a>, _opt: DecodeOpt) -> Self {
@@ -184,8 +160,8 @@ impl<'a> EnvVisitor<'a> for MapKeyVisitor<'a> {
     }
 }
 
-impl<'de> Visitor<'de> for MapKeyVisitor<'de> {
-    type Value = Term<'de>;
+impl<'de, 'a> Visitor<'de> for MapKeyVisitor<'a> {
+    type Value = Term<'a>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str("any valid JSON value")
@@ -207,14 +183,25 @@ struct TermVisitor<'a> {
     opt: DecodeOpt,
 }
 
+impl<'de, 'a> DeserializeSeed<'de> for TermVisitor<'a> {
+    type Value = Term<'a>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self.clone())
+    }
+}
+
 impl<'a> EnvVisitor<'a> for TermVisitor<'a> {
     fn from_env(env: Env<'a>, opt: DecodeOpt) -> Self {
         Self { env, opt }
     }
 }
 
-impl<'de> Visitor<'de> for TermVisitor<'de> {
-    type Value = Term<'de>;
+impl<'de, 'a> Visitor<'de> for TermVisitor<'a> {
+    type Value = Term<'a>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str("any valid JSON value")
@@ -265,7 +252,7 @@ impl<'de> Visitor<'de> for TermVisitor<'de> {
     #[inline]
     fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
-        D: serde::Deserializer<'de>,
+        D: Deserializer<'de>,
     {
         deserializer.deserialize_any(self)
     }
@@ -280,9 +267,13 @@ impl<'de> Visitor<'de> for TermVisitor<'de> {
     where
         V: SeqAccess<'de>,
     {
-        let mut vec = Vec::new();
-        while let Some(elem) = visitor.next_element::<MyTerm>()? {
-            vec.push(elem.inner);
+        let mut vec = match visitor.size_hint() {
+            Some(size) => Vec::with_capacity(size),
+            None => Vec::new(),
+        };
+
+        while let Some(elem) = visitor.next_element_seed(self.clone())? {
+            vec.push(elem);
         }
         let mut term = Term::list_new_empty(self.env);
         for item in vec.into_iter().rev() {
@@ -292,28 +283,25 @@ impl<'de> Visitor<'de> for TermVisitor<'de> {
         Ok(term)
     }
 
-    fn visit_map<V>(self, visitor: V) -> Result<Self::Value, V::Error>
+    #[inline]
+    fn visit_map<V>(self, mut visitor: V) -> Result<Self::Value, V::Error>
     where
         V: MapAccess<'de>,
     {
+        let mut map = Term::map_new(self.env);
         if self.opt.label_atom {
-            build_map::<MapKeyTerm, _>(self.env, visitor)
+            while let Some((key, value)) = visitor.next_entry_seed(self.clone(), self.clone())? {
+                map = map.map_put(key.into(), value.into()).map_err(dbadarg)?;
+            }
         } else {
-            build_map::<MyTerm, _>(self.env, visitor)
+            while let Some((key, value)) =
+                visitor.next_entry_seed(MapKeyVisitor::from(self.clone()), self.clone())?
+            {
+                map = map.map_put(key.into(), value.into()).map_err(dbadarg)?;
+            }
         }
+        Ok(map)
     }
-}
-
-fn build_map<'a, T, V>(env: Env<'a>, mut visitor: V) -> Result<Term<'a>, V::Error>
-where
-    V: MapAccess<'a>,
-    T: Deserialize<'a> + Into<Term<'a>>,
-{
-    let mut map = Term::map_new(env);
-    while let Some((key, value)) = visitor.next_entry::<T, MyTerm>()? {
-        map = map.map_put(key.into(), value.into()).map_err(dbadarg)?;
-    }
-    Ok(map)
 }
 
 rustler_export_nifs!(
@@ -344,17 +332,15 @@ fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
     }
 
     let data = Binary::from_term(args[0])?;
+    let s = std::str::from_utf8(&data).map_err(|_e| BadArg)?;
+    let opt = DecodeOpt { label_atom: false };
 
-    let res = ENV.with(|c| {
-        let env = DecodeEnv {
-            nifenv: env.as_c_arg(),
-            opt: DecodeOpt { label_atom: false },
-        };
-        c.set(Some(env));
-        let res = serde_json::from_slice::<MyTerm>(&data).map_err(|_e| BadArg);
-        c.set(None);
-        res
-    });
+    let seed = TermVisitor { env, opt };
 
-    Ok((atoms::ok(), res?.inner).encode(env))
+    let read = serde_json::de::StrRead::new(s);
+    let res = seed
+        .deserialize(&mut serde_json::de::Deserializer::new(read))
+        .map_err(|_e| BadArg)?;
+
+    Ok((atoms::ok(), res).encode(env))
 }
