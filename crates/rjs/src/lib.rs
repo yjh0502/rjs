@@ -190,7 +190,7 @@ impl<'de, 'a> DeserializeSeed<'de> for TermVisitor<'a> {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_any(self.clone())
+        deserializer.deserialize_any(self)
     }
 }
 
@@ -272,15 +272,10 @@ impl<'de, 'a> Visitor<'de> for TermVisitor<'a> {
             None => Vec::new(),
         };
 
-        while let Some(elem) = visitor.next_element_seed(self.clone())? {
+        while let Some(elem) = visitor.next_element_seed(self)? {
             vec.push(elem);
         }
-        let mut term = Term::list_new_empty(self.env);
-        for item in vec.into_iter().rev() {
-            term = term.list_prepend(item);
-        }
-
-        Ok(term)
+        Ok(vec.as_slice().encode(self.env))
     }
 
     #[inline]
@@ -289,18 +284,20 @@ impl<'de, 'a> Visitor<'de> for TermVisitor<'a> {
         V: MapAccess<'de>,
     {
         let mut map = Term::map_new(self.env);
-        if self.opt.label_atom {
-            while let Some((key, value)) = visitor.next_entry_seed(self.clone(), self.clone())? {
-                map = map.map_put(key.into(), value.into()).map_err(dbadarg)?;
-            }
-        } else {
-            while let Some((key, value)) =
-                visitor.next_entry_seed(MapKeyVisitor::from(self.clone()), self.clone())?
-            {
-                map = map.map_put(key.into(), value.into()).map_err(dbadarg)?;
+        loop {
+            let res = if self.opt.label_atom {
+                visitor.next_entry_seed(MapKeyVisitor::from(self), self)?
+            } else {
+                visitor.next_entry_seed(self, self)?
+            };
+
+            match res {
+                Some((key, value)) => {
+                    map = map.map_put(key.into(), value.into()).map_err(dbadarg)?;
+                }
+                None => return Ok(map),
             }
         }
-        Ok(map)
     }
 }
 
