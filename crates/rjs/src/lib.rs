@@ -77,29 +77,23 @@ impl<'a> Serialize for MyTerm<'a> {
             }
 
             List => {
-                let mut v = Vec::new();
-
                 let mut tail = term;
+
+                let mut seq = serializer.serialize_seq(None)?;
                 while !tail.is_empty_list() {
                     let (head, next_tail) = tail.list_get_cell().map_err(badarg)?;
-                    v.push(head);
-                    tail = next_tail;
-                }
 
-                let mut seq = serializer.serialize_seq(Some(v.len()))?;
-                for elem in v {
-                    let t_elem = MyTerm::from(elem);
-                    seq.serialize_element(&t_elem)?;
+                    let elem = MyTerm::from(head);
+                    seq.serialize_element(&elem)?;
+
+                    tail = next_tail;
                 }
                 seq.end()
             }
 
             Map => {
                 let size = term.map_size().map_err(badarg)?;
-                let iter = match MapIterator::new(term) {
-                    Some(iter) => iter,
-                    None => return Err(badarg(())),
-                };
+                let iter = MapIterator::new(term).ok_or_else(|| badarg(()))?;
                 let mut map = serializer.serialize_map(Some(size))?;
                 for (key, val) in iter {
                     let t_key = MyTerm::from(key);
@@ -187,11 +181,8 @@ impl<'de, 'a> Visitor<'de> for TermVisitor<'a> {
 
     #[inline]
     fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
-        if value {
-            Ok(atoms::t().to_term(self.env))
-        } else {
-            Ok(atoms::f().to_term(self.env))
-        }
+        let atom = if value { atoms::t() } else { atoms::f() };
+        Ok(atom.to_term(self.env))
     }
 
     #[inline]
@@ -245,15 +236,11 @@ impl<'de, 'a> Visitor<'de> for TermVisitor<'a> {
     where
         V: SeqAccess<'de>,
     {
-        let mut vec = match visitor.size_hint() {
-            Some(size) => Vec::with_capacity(size),
-            None => Vec::new(),
-        };
-
+        let mut vec = vec_maybe_size(visitor.size_hint());
         while let Some(elem) = visitor.next_element_seed(self)? {
             vec.push(elem);
         }
-        Ok(vec.as_slice().encode(self.env))
+        Ok(vec.encode(self.env))
     }
 
     #[inline]
@@ -261,8 +248,8 @@ impl<'de, 'a> Visitor<'de> for TermVisitor<'a> {
     where
         V: MapAccess<'de>,
     {
-        let mut keys = Vec::new();
-        let mut values = Vec::new();
+        let mut keys = vec_maybe_size(visitor.size_hint());
+        let mut values = vec_maybe_size(visitor.size_hint());
 
         loop {
             let key = if self.opt.label_atom {
@@ -281,6 +268,13 @@ impl<'de, 'a> Visitor<'de> for TermVisitor<'a> {
         }
 
         Term::map_from_arrays(self.env, &keys, &values).map_err(dbadarg)
+    }
+}
+
+fn vec_maybe_size<T>(size: Option<usize>) -> Vec<T> {
+    match size {
+        Some(size) => Vec::with_capacity(size),
+        None => Vec::new(),
     }
 }
 
