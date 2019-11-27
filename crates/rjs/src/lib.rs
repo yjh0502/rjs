@@ -9,6 +9,8 @@ use rustler::{Encoder, Env, NifResult, Term, TermType};
 use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 
+mod r#unsafe;
+
 mod atoms {
     rustler_atoms! {
         atom ok;
@@ -309,9 +311,15 @@ fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
     let s = std::str::from_utf8(&data).map_err(|_e| BadArg)?;
     let opt = DecodeOpt { label_atom: false };
 
-    let seed = TermVisitor { env, opt };
-
     let read = serde_json::de::StrRead::new(s);
+
+    /*
+    let seed = TermVisitor { env, opt };
+    let res = seed
+        .deserialize(&mut serde_json::de::Deserializer::new(read))
+        .map_err(|_e| BadArg)?;
+    */
+    let seed = r#unsafe::TermVisitor { env, opt };
     let res = seed
         .deserialize(&mut serde_json::de::Deserializer::new(read))
         .map_err(|_e| BadArg)?;
