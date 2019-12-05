@@ -154,27 +154,33 @@ impl<'de, 'a, 'b> Visitor<'de> for MapKeyVisitor<'a, 'b> {
     where
         E: serde::de::Error,
     {
-        self.v.get_atom(value).map_err(dbadarg)
+        self.v.get_key(value).map_err(dbadarg)
     }
 }
 
 struct TermVisitor<'a> {
     env: Env<'a>,
     opt: DecodeOpt,
-    atom_cache: RefCell<HashMap<String, Term<'a>>>,
+    key_cache: RefCell<HashMap<String, Term<'a>>>,
 }
 
 impl<'a> TermVisitor<'a> {
-    fn get_atom(&self, value: &str) -> Result<Term<'a>, rustler::Error> {
-        let mut m = self.atom_cache.borrow_mut();
+    fn get_key(&self, value: &str) -> Result<Term<'a>, rustler::Error> {
+        let mut m = self.key_cache.borrow_mut();
         if let Some(v) = m.get(value) {
             return Ok(v.clone());
         }
 
-        let atom = Atom::from_str(self.env, value)?.to_term(self.env);
         let s = value.to_owned();
-        m.insert(s, atom);
-        Ok(atom)
+
+        let key = if self.opt.label_atom {
+            Atom::from_str(self.env, value)?.to_term(self.env)
+        } else {
+            value.encode(self.env)
+        };
+
+        m.insert(s, key);
+        Ok(key)
     }
 }
 
@@ -270,11 +276,7 @@ impl<'de, 'a, 'b> Visitor<'de> for &'b TermVisitor<'a> {
         let mut values = vec_maybe_size(visitor.size_hint());
 
         loop {
-            let key = if self.opt.label_atom {
-                visitor.next_key_seed(MapKeyVisitor::from(self))?
-            } else {
-                visitor.next_key_seed(self)?
-            };
+            let key = visitor.next_key_seed(MapKeyVisitor::from(self))?;
             match key {
                 Some(key) => {
                     let value = visitor.next_value_seed(self)?;
@@ -325,7 +327,7 @@ fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
 
     let data = Binary::from_term(args[0])?;
     let s = std::str::from_utf8(&data).map_err(|_e| BadArg)?;
-    let opt = DecodeOpt { label_atom: true };
+    let opt = DecodeOpt { label_atom: false };
 
     let read = serde_json::de::StrRead::new(s);
     let mut deser = serde_json::de::Deserializer::new(read);
@@ -334,7 +336,7 @@ fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
         let seed = TermVisitor {
             env,
             opt,
-            atom_cache: Default::default(),
+            key_cache: Default::default(),
         };
         seed.deserialize(&mut deser)
             .map(|v| v.as_c_arg())
