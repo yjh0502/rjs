@@ -311,7 +311,7 @@ fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
 
     let data = Binary::from_term(args[0])?;
     let s = std::str::from_utf8(&data).map_err(|_e| BadArg)?;
-    let opt = DecodeOpt { label_atom: false };
+    let opt = DecodeOpt { label_atom: true };
 
     let read = serde_json::de::StrRead::new(s);
 
