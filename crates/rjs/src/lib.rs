@@ -338,12 +338,12 @@ fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
             opt,
             key_cache: Default::default(),
         };
-        seed.deserialize(&mut deser)
-            .map(|v| v.as_c_arg())
-            .map_err(|_e| BadArg)?
+        seed.deserialize(&mut deser).map_err(|_e| BadArg)?
     } else {
         let seed = r#unsafe::TermVisitor { env, opt };
-        seed.deserialize(&mut deser).map_err(|_e| BadArg)?
+        seed.deserialize(&mut deser)
+            .map_err(|_e| BadArg)
+            .map(|v| unsafe { Term::new(env, v) })?
     };
 
     Ok((atoms::ok(), res).encode(env))
