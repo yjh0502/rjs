@@ -73,8 +73,9 @@ impl<'a> Serialize for MyTerm<'a> {
             }
 
             Binary => {
-                let bin = term.into_binary().map_err(badarg)?;
-                serializer.serialize_bytes(&bin)
+                let bin = term.decode_as_binary().map_err(badarg)?;
+                let s = std::str::from_utf8(&bin).map_err(badarg)?;
+                serializer.serialize_str(s)
             }
 
             EmptyList => {
