@@ -120,13 +120,12 @@ impl<'a> Serialize for MyTerm<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
 struct MapKeyVisitor<'a> {
     env: Env<'a>,
 }
-impl<'a> From<TermVisitor<'a>> for MapKeyVisitor<'a> {
-    fn from(v: TermVisitor<'a>) -> Self {
-        Self { env: v.env }
+impl<'a> From<Env<'a>> for MapKeyVisitor<'a> {
+    fn from(env: Env<'a>) -> Self {
+        Self { env }
     }
 }
 
@@ -158,13 +157,12 @@ impl<'de, 'a> Visitor<'de> for MapKeyVisitor<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
 struct TermVisitor<'a> {
     env: Env<'a>,
     opt: DecodeOpt,
 }
 
-impl<'de, 'a> DeserializeSeed<'de> for TermVisitor<'a> {
+impl<'de, 'a, 'b> DeserializeSeed<'de> for &'b TermVisitor<'a> {
     type Value = Term<'a>;
 
     #[inline]
@@ -176,7 +174,7 @@ impl<'de, 'a> DeserializeSeed<'de> for TermVisitor<'a> {
     }
 }
 
-impl<'de, 'a> Visitor<'de> for TermVisitor<'a> {
+impl<'de, 'a, 'b> Visitor<'de> for &'b TermVisitor<'a> {
     type Value = Term<'a>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -257,7 +255,7 @@ impl<'de, 'a> Visitor<'de> for TermVisitor<'a> {
 
         loop {
             let key = if self.opt.label_atom {
-                visitor.next_key_seed(MapKeyVisitor::from(self))?
+                visitor.next_key_seed(MapKeyVisitor::from(self.env))?
             } else {
                 visitor.next_key_seed(self)?
             };
@@ -314,16 +312,16 @@ fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
     let opt = DecodeOpt { label_atom: true };
 
     let read = serde_json::de::StrRead::new(s);
+    let mut deser = serde_json::de::Deserializer::new(read);
 
     let res = if USE_UNSAFE {
         let seed = TermVisitor { env, opt };
-        seed.deserialize(&mut serde_json::de::Deserializer::new(read))
-            .map(|t| t.as_c_arg())
+        seed.deserialize(&mut deser)
+            .map(|v| v.as_c_arg())
             .map_err(|_e| BadArg)?
     } else {
         let seed = r#unsafe::TermVisitor { env, opt };
-        seed.deserialize(&mut serde_json::de::Deserializer::new(read))
-            .map_err(|_e| BadArg)?
+        seed.deserialize(&mut deser).map_err(|_e| BadArg)?
     };
 
     Ok((atoms::ok(), res).encode(env))
