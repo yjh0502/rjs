@@ -1,6 +1,8 @@
 #[macro_use]
 extern crate rustler;
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt;
 
 use rustler::types::{atom::Atom, Binary, MapIterator, OwnedBinary};
@@ -120,16 +122,16 @@ impl<'a> Serialize for MyTerm<'a> {
     }
 }
 
-struct MapKeyVisitor<'a> {
-    env: Env<'a>,
+struct MapKeyVisitor<'a, 'b> {
+    v: &'b TermVisitor<'a>,
 }
-impl<'a> From<Env<'a>> for MapKeyVisitor<'a> {
-    fn from(env: Env<'a>) -> Self {
-        Self { env }
+impl<'a, 'b> From<&'b TermVisitor<'a>> for MapKeyVisitor<'a, 'b> {
+    fn from(v: &'b TermVisitor<'a>) -> Self {
+        Self { v }
     }
 }
 
-impl<'de, 'a> DeserializeSeed<'de> for MapKeyVisitor<'a> {
+impl<'de, 'a, 'b> DeserializeSeed<'de> for MapKeyVisitor<'a, 'b> {
     type Value = Term<'a>;
 
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
@@ -140,7 +142,7 @@ impl<'de, 'a> DeserializeSeed<'de> for MapKeyVisitor<'a> {
     }
 }
 
-impl<'de, 'a> Visitor<'de> for MapKeyVisitor<'a> {
+impl<'de, 'a, 'b> Visitor<'de> for MapKeyVisitor<'a, 'b> {
     type Value = Term<'a>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -152,14 +154,28 @@ impl<'de, 'a> Visitor<'de> for MapKeyVisitor<'a> {
     where
         E: serde::de::Error,
     {
-        let atom = Atom::from_str(self.env, value).map_err(dbadarg)?;
-        Ok(atom.to_term(self.env))
+        self.v.get_atom(value).map_err(dbadarg)
     }
 }
 
 struct TermVisitor<'a> {
     env: Env<'a>,
     opt: DecodeOpt,
+    atom_cache: RefCell<HashMap<String, Term<'a>>>,
+}
+
+impl<'a> TermVisitor<'a> {
+    fn get_atom(&self, value: &str) -> Result<Term<'a>, rustler::Error> {
+        let mut m = self.atom_cache.borrow_mut();
+        if let Some(v) = m.get(value) {
+            return Ok(v.clone());
+        }
+
+        let atom = Atom::from_str(self.env, value)?.to_term(self.env);
+        let s = value.to_owned();
+        m.insert(s, atom);
+        Ok(atom)
+    }
 }
 
 impl<'de, 'a, 'b> DeserializeSeed<'de> for &'b TermVisitor<'a> {
@@ -255,7 +271,7 @@ impl<'de, 'a, 'b> Visitor<'de> for &'b TermVisitor<'a> {
 
         loop {
             let key = if self.opt.label_atom {
-                visitor.next_key_seed(MapKeyVisitor::from(self.env))?
+                visitor.next_key_seed(MapKeyVisitor::from(self))?
             } else {
                 visitor.next_key_seed(self)?
             };
@@ -314,8 +330,12 @@ fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
     let read = serde_json::de::StrRead::new(s);
     let mut deser = serde_json::de::Deserializer::new(read);
 
-    let res = if USE_UNSAFE {
-        let seed = TermVisitor { env, opt };
+    let res = if !USE_UNSAFE {
+        let seed = TermVisitor {
+            env,
+            opt,
+            atom_cache: Default::default(),
+        };
         seed.deserialize(&mut deser)
             .map(|v| v.as_c_arg())
             .map_err(|_e| BadArg)?
