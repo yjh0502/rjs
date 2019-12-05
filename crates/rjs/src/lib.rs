@@ -11,6 +11,8 @@ use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 
 mod r#unsafe;
 
+const USE_UNSAFE: bool = false;
+
 mod atoms {
     rustler_atoms! {
         atom ok;
@@ -313,16 +315,16 @@ fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
 
     let read = serde_json::de::StrRead::new(s);
 
-    /*
-    let seed = TermVisitor { env, opt };
-    let res = seed
-        .deserialize(&mut serde_json::de::Deserializer::new(read))
-        .map_err(|_e| BadArg)?;
-    */
-    let seed = r#unsafe::TermVisitor { env, opt };
-    let res = seed
-        .deserialize(&mut serde_json::de::Deserializer::new(read))
-        .map_err(|_e| BadArg)?;
+    let res = if USE_UNSAFE {
+        let seed = TermVisitor { env, opt };
+        seed.deserialize(&mut serde_json::de::Deserializer::new(read))
+            .map(|t| t.as_c_arg())
+            .map_err(|_e| BadArg)?
+    } else {
+        let seed = r#unsafe::TermVisitor { env, opt };
+        seed.deserialize(&mut serde_json::de::Deserializer::new(read))
+            .map_err(|_e| BadArg)?
+    };
 
     Ok((atoms::ok(), res).encode(env))
 }
