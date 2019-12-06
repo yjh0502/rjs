@@ -6,7 +6,7 @@ On `rebar.config`, add
 
 ```erlang
 {deps, [
-    {bcrypt, {git, "https://github.com/yjh0502/rjs", {branch, "master"}}}
+    {rjs, {git, "https://github.com/yjh0502/rjs", {branch, "master"}}}
 ]}.
 ```
 
