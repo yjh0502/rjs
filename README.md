@@ -3,7 +3,7 @@
 ## benchmark
 
 ### encoding performance, normalized
-![bench decode](./etc/bench_decode.svg)
+![bench encode](./etc/bench_encode.svg)
 
 ### decoding performance, normalized
-![bench encode](./etc/bench_encode.svg)
+![bench decode](./etc/bench_decode.svg)
