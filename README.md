@@ -15,11 +15,11 @@ On `rebar.config`, add
 ### `decode/1,2`
 
 ```erlang
-decode(JSON) -> Term
-decode(JSON, Opts) -> Term
+decode(JSON) -> Result
+decode(JSON, Opts) -> Result
 
   JSON = binary() | iolist()
-  Term = term()
+  Result = {ok, term()}
   Opts = [binary | atom | existing_atom | attempt_atom]
 ```
 
@@ -28,10 +28,10 @@ See [jsx:decode/1,2](https://github.com/talentdeficit/jsx/blob/develop/README.md
 ### `encode/1`
 
 ```erlang
-encode(Term) -> JSON
+encode(Term) -> Result
 
   Term = term()
-  JSON = binary()
+  Result = {ok, binary()}
 ```
 
 
