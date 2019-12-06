@@ -2,16 +2,20 @@
 -compile([no_native]).
 
 -on_load(init/0).
--export([encode/1, decode/1]).
+-export([encode/1, decode/1, decode/2]).
 
 encode(Data) ->
     nif_encode(Data).
 
-decode(Data) when is_binary(Data) ->
-    nif_decode(Data);
 decode(Data) ->
+    decode(Data, []).
+
+decode(Bin, Opts) when is_binary(Bin) ->
+    nif_decode(Bin, Opts);
+
+decode(Data, Opts) ->
     Bin = erlang:iolist_to_binary(Data),
-    nif_decode(Bin).
+    nif_decode(Bin, Opts).
 
 init() ->
     PrivDir = code:priv_dir(?MODULE),
@@ -25,5 +29,5 @@ not_loaded(Line) ->
 nif_encode(_Data) ->
     ?NOT_LOADED.
 
-nif_decode(_Data) ->
+nif_decode(_Data, _Opts) ->
     ?NOT_LOADED.

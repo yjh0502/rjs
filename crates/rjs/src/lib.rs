@@ -11,10 +11,6 @@ use rustler::{Encoder, Env, NifResult, Term, TermType};
 use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 
-mod r#unsafe;
-
-const USE_UNSAFE: bool = false;
-
 mod atoms {
     rustler_atoms! {
         atom ok;
@@ -22,12 +18,32 @@ mod atoms {
         atom f = "false";
         atom null;
         atom undefined;
+
+        atom labels;
+        atom binary;
+        atom atom;
+        atom attempt_atom;
+        atom existing_atom;
     }
 }
 
 #[derive(Clone, Copy)]
+enum LabelOpt {
+    Binary,
+    Atom,
+    ExistingAtom,
+    AttemptAtom,
+}
+
+impl Default for LabelOpt {
+    fn default() -> Self {
+        LabelOpt::Binary
+    }
+}
+
+#[derive(Clone, Copy, Default)]
 struct DecodeOpt {
-    label_atom: bool,
+    label: LabelOpt,
 }
 
 struct MyTerm<'a> {
@@ -174,10 +190,26 @@ impl<'a> TermVisitor<'a> {
 
         let s = value.to_owned();
 
-        let key = if self.opt.label_atom {
-            Atom::from_str(self.env, value)?.to_term(self.env)
-        } else {
-            value.encode(self.env)
+        let key = match self.opt.label {
+            LabelOpt::Atom => Atom::from_str(self.env, value)?.to_term(self.env),
+
+            LabelOpt::Binary => value.encode(self.env),
+
+            LabelOpt::AttemptAtom => {
+                //
+                match Atom::try_from_bytes(self.env, value.as_bytes())? {
+                    Some(atom) => atom.to_term(self.env),
+                    None => return Err(rustler::Error::BadArg),
+                }
+            }
+
+            LabelOpt::ExistingAtom => {
+                //
+                match Atom::try_from_bytes(self.env, value.as_bytes())? {
+                    Some(atom) => atom.to_term(self.env),
+                    None => value.encode(self.env),
+                }
+            }
         };
 
         m.insert(s, key);
@@ -301,7 +333,7 @@ fn vec_maybe_size<T>(size: Option<usize>) -> Vec<T> {
 
 rustler_export_nifs!(
     "rjs",
-    [("nif_encode", 1, encode), ("nif_decode", 1, decode)],
+    [("nif_encode", 1, encode), ("nif_decode", 2, decode)],
     None
 );
 
@@ -321,31 +353,50 @@ fn encode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
     Ok((atoms::ok(), bin.to_term(env)).encode(env))
 }
 
+fn parse_decode_opts<'a>(env: Env<'a>, mut t: Term<'a>) -> NifResult<DecodeOpt> {
+    let mut opt = DecodeOpt {
+        label: LabelOpt::Binary,
+    };
+    while !t.is_empty_list() {
+        let (head, next_tail) = t.list_get_cell()?;
+        t = next_tail;
+
+        if head == atoms::binary().to_term(env) {
+            opt.label = LabelOpt::Binary;
+        }
+        if head == atoms::atom().to_term(env) {
+            opt.label = LabelOpt::Atom;
+        }
+        if head == atoms::existing_atom().to_term(env) {
+            opt.label = LabelOpt::ExistingAtom;
+        }
+        if head == atoms::attempt_atom().to_term(env) {
+            opt.label = LabelOpt::AttemptAtom;
+        }
+    }
+
+    Ok(opt)
+}
+
 fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
-    if args.len() != 1 {
+    if args.len() != 2 {
         return Err(BadArg);
     }
 
     let data = Binary::from_term(args[0])?;
     let s = std::str::from_utf8(&data).map_err(|_e| BadArg)?;
-    let opt = DecodeOpt { label_atom: false };
+
+    let opt = parse_decode_opts(env, args[1])?;
 
     let read = serde_json::de::StrRead::new(s);
     let mut deser = serde_json::de::Deserializer::new(read);
 
-    let res = if !USE_UNSAFE {
-        let seed = TermVisitor {
-            env,
-            opt,
-            key_cache: Default::default(),
-        };
-        seed.deserialize(&mut deser).map_err(|_e| BadArg)?
-    } else {
-        let seed = r#unsafe::TermVisitor { env, opt };
-        seed.deserialize(&mut deser)
-            .map_err(|_e| BadArg)
-            .map(|v| unsafe { Term::new(env, v) })?
+    let seed = TermVisitor {
+        env,
+        opt,
+        key_cache: Default::default(),
     };
+    let res = seed.deserialize(&mut deser).map_err(|_e| BadArg)?;
 
     Ok((atoms::ok(), res).encode(env))
 }
