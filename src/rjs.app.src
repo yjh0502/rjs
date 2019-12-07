@@ -4,6 +4,6 @@
     {registered, []},
     {applications, [kernel, stdlib]},
     {maintainers, ["Jihyun Yu"]},
-    {licenses, ["MIT", "APACHE"]},
+    {licenses, ["APACHE"]},
     {links, [{"GitHub", "https://github.com/yjh0502/rjs"}]}
 ]}.
