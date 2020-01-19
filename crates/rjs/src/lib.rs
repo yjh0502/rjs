@@ -84,8 +84,13 @@ impl<'a> Serialize for MyTerm<'a> {
 
         match term.get_type() {
             Atom => {
-                let s = term.atom_to_string().map_err(badarg)?;
-                serializer.serialize_str(&s)
+                let atom = rustler::Atom::from_term(term).map_err(badarg)?;
+                if atom == atoms::null() {
+                    serializer.serialize_unit()
+                } else {
+                    let s = term.atom_to_string().map_err(badarg)?;
+                    serializer.serialize_str(&s)
+                }
             }
 
             Binary => {
