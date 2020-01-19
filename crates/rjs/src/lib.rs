@@ -87,6 +87,10 @@ impl<'a> Serialize for MyTerm<'a> {
                 let atom = rustler::Atom::from_term(term).map_err(badarg)?;
                 if atom == atoms::null() {
                     serializer.serialize_unit()
+                } else if atom == atoms::t() {
+                    serializer.serialize_bool(true)
+                } else if atom == atoms::f() {
+                    serializer.serialize_bool(false)
                 } else {
                     let s = term.atom_to_string().map_err(badarg)?;
                     serializer.serialize_str(&s)
