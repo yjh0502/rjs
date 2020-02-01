@@ -1,2 +1,12 @@
+dist: bionic
 language: erlang
-script: rebar3 compile
+otp_release:
+  - 21.1
+before_install:
+  - sudo apt-get update
+  - sudo apt-get install -y gcc
+  - curl https://build.travis-ci.org/files/rustup-init.sh -sSf | sh -s -- -y --default-toolchain stable
+before_script:
+  - source $TRAVIS_HOME/.cargo/env
+script:
+  - rebar3 eunit
