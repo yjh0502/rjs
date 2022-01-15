@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate rustler;
-
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
@@ -12,18 +9,18 @@ use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 
 mod atoms {
-    rustler_atoms! {
-        atom ok;
-        atom t = "true";
-        atom f = "false";
-        atom null;
-        atom undefined;
+    rustler::atoms! {
+        ok,
+        t = "true",
+        f = "false",
+        null,
+        undefined,
 
-        atom labels;
-        atom binary;
-        atom atom;
-        atom attempt_atom;
-        atom existing_atom;
+        labels,
+        binary,
+        atom,
+        attempt_atom,
+        existing_atom,
     }
 }
 
@@ -340,18 +337,10 @@ fn vec_maybe_size<T>(size: Option<usize>) -> Vec<T> {
     }
 }
 
-rustler_export_nifs!(
-    "rjs",
-    [("nif_encode", 1, encode), ("nif_decode", 2, decode)],
-    None
-);
+rustler::init!("rjs", [nif_encode, nif_decode]);
 
-fn encode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
-    if args.len() != 1 {
-        return Err(BadArg);
-    }
-
-    let term = args[0];
+#[rustler::nif]
+fn nif_encode<'a>(env: Env<'a>, term: Term<'a>) -> NifResult<Term<'a>> {
     let term = MyTerm::from(term);
     let out = serde_json::to_string(&term).map_err(|_e| BadArg)?;
 
@@ -387,15 +376,11 @@ fn parse_decode_opts<'a>(env: Env<'a>, mut t: Term<'a>) -> NifResult<DecodeOpt> 
     Ok(opt)
 }
 
-fn decode<'a>(env: Env<'a>, args: &[Term<'a>]) -> NifResult<Term<'a>> {
-    if args.len() != 2 {
-        return Err(BadArg);
-    }
-
-    let data = Binary::from_term(args[0])?;
+#[rustler::nif]
+fn nif_decode<'a>(env: Env<'a>, data: Binary<'a>, opts: Term<'a>) -> NifResult<Term<'a>> {
     let s = std::str::from_utf8(&data).map_err(|_e| BadArg)?;
 
-    let opt = parse_decode_opts(env, args[1])?;
+    let opt = parse_decode_opts(env, opts)?;
 
     let read = serde_json::de::StrRead::new(s);
     let mut deser = serde_json::de::Deserializer::new(read);

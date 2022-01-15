@@ -1,3 +1,4 @@
 target
 _build
 priv
+TEST*
